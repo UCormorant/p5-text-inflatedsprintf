@@ -3,7 +3,6 @@ use 5.008005;
 use utf8;
 use strict;
 use warnings;
-use autobox::dump;
 
 our $VERSION = "0.01";
 
