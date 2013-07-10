@@ -53,5 +53,16 @@
       }
    },
    "release_status" : "unstable",
+   "resources" : {
+      "bugtracker" : {
+         "web" : "https://github.com/UCormorant/p5-text-inflatedsprintf/issues"
+      },
+      "homepage" : "https://github.com/UCormorant/p5-text-inflatedsprintf",
+      "repository" : {
+         "type" : "git",
+         "url" : "git://github.com/UCormorant/p5-text-inflatedsprintf.git",
+         "web" : "https://github.com/UCormorant/p5-text-inflatedsprintf"
+      }
+   },
    "version" : "0.01"
 }
