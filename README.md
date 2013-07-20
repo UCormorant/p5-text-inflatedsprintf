@@ -1,6 +1,6 @@
 # NAME
 
-Text::InflatedSprintf - sprintf-like template engine for short messages
+Text::InflatedSprintf - sprintf-like template library for short messages
 
 # SYNOPSIS
 

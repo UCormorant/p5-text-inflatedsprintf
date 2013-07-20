@@ -1,5 +1,5 @@
 {
-   "abstract" : "sprintf-like template engine for short messages",
+   "abstract" : "sprintf-like template library for short messages",
    "author" : [
       "U=Cormorant <u@chimata.org>"
    ],
@@ -64,5 +64,5 @@
          "web" : "https://github.com/UCormorant/p5-text-inflatedsprintf"
       }
    },
-   "version" : "0.01"
+   "version" : "0.02"
 }

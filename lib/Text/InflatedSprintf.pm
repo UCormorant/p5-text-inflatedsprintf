@@ -282,13 +282,13 @@ sub _hash_loop {
     my ($self, $params, $name) = @_;
     my $refaddr = refaddr $params->{$name};
     my $value = $self->{_index}{$refaddr};
-    my @index = each $params->{$name};
+    my @index = each %{$params->{$name}};
     if (not defined $value) {
         $value = \@index;
-        @index = each $params->{$name};
+        @index = each %{$params->{$name}};
     }
     if (not defined $index[0]) {
-        @index = each $params->{$name};
+        @index = each %{$params->{$name}};
         $self->{_loop}{$refaddr} = 1;
     }
     $self->{_index}{$refaddr} = \@index;
