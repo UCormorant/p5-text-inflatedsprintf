@@ -47,7 +47,7 @@
       },
       "test" : {
          "requires" : {
-            "Test::Difflet" : "0",
+            "Test::Base::Less" : "0.11",
             "Test::More" : "0.98"
          }
       }
