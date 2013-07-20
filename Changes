@@ -1,6 +1,26 @@
-Revision history for Perl extension Text-MicroTextInflator
+Revision history for Perl extension Text-InflatedSprintf
 
 {{$NEXT}}
+
+    - %(name) syntax accepts array and hash references
+
+        - if [1,2,3] is given, %(name)d is "1", and next %(name)d will be "2"
+
+    - %{FORMAT}* syntax absorbs array elements or hash values until reach to end of data
+    - %{FORMAT} syntax can be nested
+    - %{|name|FORMAT} syntax is available. FORMAT takes "name" data set.
+
+        - it allows hash reference data only.
+
+    - these options are available: kv_separator, depth_limit
+
+        - %(name) syntax show "key:value" text if kv_separator is set ":"
+        - if kv_separator is unset, %(name) syntax uses (each $hash)[1] with a hash reference
+        - depth_limit restricts %{FORMAT} syntax nest. default 5
+
+    - set_format method: replace instance's format after __PACKAGE__->new
+
+    - ヴァー英語つらいヴァー
 
 0.01 2013-07-10T20:10:19Z
 

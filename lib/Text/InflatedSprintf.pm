@@ -4,10 +4,9 @@ use utf8;
 use strict;
 use warnings;
 
-our $VERSION = "0.01";
+our $VERSION = "0.02";
 
 use parent qw(Exporter);
-
 our @EXPORT = qw(inflated_sprintf);
 
 use Carp ();
@@ -62,40 +61,60 @@ our %REGEX = (
     /x,
 );
 
+sub inflated_sprintf {
+    __PACKAGE__->new( format => +shift )->format(@_);
+}
+
 sub new {
     my $class = shift;
-    my %args = @_ == 1 ? %{$_[0]} : @_;
+    my %args = scalar @_ == 1 ? %{+shift} : @_;
     my $self = bless {
+        format => '',
+
         minbyte => undef,
         maxbyte => undef,
         minlength => undef,
         maxlength  => undef,
 
-        under_code => undef,
-        over_code => undef,
+        on_less => undef,
+        on_over => undef,
 
         depth_limit => 5,
-        kv_separator => ':',
+        kv_separator => undef,
+
+        %args,
     }, $class;
 
-    $self->{minbyte} = delete $args{minbyte} if exists $args{minbyte};
-    $self->{maxbyte} = delete $args{maxbyte} if exists $args{maxbyte};
-    $self->{minlength} = delete $args{minlength} if exists $args{minlength};
-    $self->{maxlength} = delete $args{maxlength} if exists $args{maxlength};
+    $self->set_format;
+    $self;
+}
 
-    $self->{depth_limit} = delete $args{depth_limit} if exists $args{depth_limit};
-    $self->{kv_separator} = delete $args{kv_separator} if exists $args{kv_separator};
+sub set_format {
+    my $self = shift;
 
-    $self->{format} = delete $args{format} || Carp::croak "format";
+    $self->{format} = $_[0] if defined $_[0];
+
+    Carp::croak "no format given" if $self->{format} eq '';
+
     $self->_mk_context;
-
     $self;
 }
 
 sub _mk_context {
     my ($self) = @_;
 
-    my $const = sub { +{ content => +shift } };
+    $self->{_context} = {};
+    $self->{_require} = {};
+    $self->{_index} = {};
+    $self->{_loop} = {};
+
+    my $const = sub { +{
+        content => +shift,
+        name => undef,
+        operator => undef,
+        parent => undef,
+        require => {},
+    } };
     my $mk_relationship = sub {
         $_[0]{parent} = $_[1];
         push @{$_[1]{content}}, $_[0];
@@ -123,10 +142,8 @@ sub _mk_context {
             $depth++;
             Carp::croak 'recursive error: too depth' if $self->{depth_limit} > -1 && $depth > $self->{depth_limit};
             $parent->{name} = $name if $name;
-            next;
         }
-
-        if ($depth and $close) {
+        elsif ($depth and $close) {
             $parent->{operator} = $operator if $operator;
 
             $current = $const->('');
@@ -134,77 +151,160 @@ sub _mk_context {
             $parent = $parent->{parent};
 
             $depth--;
-            next;
         }
-
-        $current->{content} .= $match;
+        else {
+            $current->{content} .= $match;
+        }
     }
 
     Carp::croak 'syntax error: mismatch tagging' if $depth;
 
-    $self->{_context} = $context->{content};
-    my $del; $del = sub {
+    my $mk_requirement; $mk_requirement = sub {
         for my $c (@{$_[0]}) {
-            delete $c->{parent}; $del->($c->{content}) if ref $c->{content} and reftype $c->{content} eq 'ARRAY';
+            if (ref $c->{content} and reftype $c->{content} eq 'ARRAY') {
+                $mk_requirement->($c->{content});
+            }
+            else {
+                while ($c->{content} =~ /$REGEX{sprintf}/gc) {
+                    my $conv = $1 || '';
+                    my $name = $2 || '';
+                    my $conv_prefix = $3 || '';
+                    my $conv_letter = $4 || '';
+                    next if $conv eq '%';
+
+                    $c->{parent}{require}{$name} = $conv_letter;
+                }
+            }
         }
     };
-    $del->($self->{_context});
+    $mk_requirement->($context->{content});
+
+    my $del_relationship; $del_relationship = sub {
+        for my $c (@{$_[0]}) {
+            delete $c->{parent};
+            $del_relationship->($c->{content}) if ref $c->{content} and reftype $c->{content} eq 'ARRAY';
+        }
+    };
+    $del_relationship->($context->{content});
+
+    $self->{_context} = $context->{content};
 }
 
 sub format {
-    my ($self, $data) = @_;
+    my $self = shift;
+    my %data = scalar @_ == 1 ? %{+shift} : @_;
 
-    _format($self->{_context}, $data);
+    my $formatted_content = $self->_format($self->{_context}, \%data);
+
+    return join "", @$formatted_content;
 }
 
 sub _format {
-    my ($context, $data) = @_;
+    my ($self, $context, $data) = @_;
 
     my @formatted_content;
-    for my $content (@$context) {
-        if (ref $content->{content} and reftype $content->{content} eq 'ARRAY') {
-           my $formatted_content = _format($context->{content}, $data);
-           $data->{_formatted_content_tag($formatted_content)} = $formatted_content;
-            push @formatted_content, $formatted_content;
+    for my $c (@$context) {
+        if (_is_array($c->{content})) {
+            my %has_loop = ();
+            for my $name (keys %{$c->{require}}) {
+                if (defined $data->{$name} and (_is_array($data->{$name}) or _is_hash($data->{$name}))) {
+                    $has_loop{$name} = 1;
+                }
+            }
+            while (1) {
+                my $condition = $c->{name} ? $data->{$c->{name}} : $data;
+                my $content = $self->_format($c->{content}, $condition);
+                push @formatted_content, @$content;
+
+                for my $name (keys %has_loop) {
+                    delete $has_loop{$name} if $self->{_loop}{refaddr $condition->{$name}};
+                }
+
+                last unless $c->{operator} and scalar keys %has_loop;
+            }
         }
         else {
-            push @formatted_content, $content->{content};
+            my $content = $c->{content};
+            $content =~ s/$REGEX{sprintf}/
+                $self->_conversion({
+                    context => $context,
+                    named_params => $data,
+                    conv => $1,
+                    name => $2,
+                    conv_prefix => $3,
+                    conv_letter => $4,
+                })
+            /ge;
+            push @formatted_content, $content;
         }
     }
 
-    my $format = join "", @formatted_content;
-
-    $format =~ s/$REGEX{sprintf}/
-        _conversion({
-            named_params => $data,
-            conv => $1,
-            name => $2,
-            conv_prefix => $3,
-            conv_letter => $4,
-        })
-        /ge;
-
-    return $format;
+    \@formatted_content;
 }
 
 sub _conversion {
-    my $args = shift;
+    my ($self, $args) = @_;
 
     if ($args->{conv} eq "%") {
         return "%";
     }
     else {
+        my $context = $args->{context};
+        my $name = $args->{name};
+        my $params = $args->{named_params};
+        my $exists = exists $params->{$args->{name}};
+        my $is_array = _is_array($params->{$args->{name}});
+        my $is_hash  = _is_hash($params->{$args->{name}});
+        my $is_code  = _is_code($params->{$args->{name}});
+
         my $format = "%" . $args->{conv_prefix} . $args->{conv_letter};
-        return sprintf $format, $args->{named_params}->{$args->{name}};
+        my $replace = $is_array ? $self->_array_loop($params, $name) :
+                      $is_hash  ? $self->_hash_loop($params, $name)  :
+                      $is_code  ? $params->{$args->{name}}->($self, $context, $params) :
+                      $exists   ? $params->{$args->{name}}           : "";
+
+        return sprintf $format, $replace;
     }
 }
 
-sub _formatted_content_tag {
-    sprintf "%%(__fmt_tag_%s)s", refaddr $_[0];
+sub _array_loop {
+    my ($self, $params, $name) = @_;
+    my $refaddr = refaddr $params->{$name};
+    my $index = $self->{_index}{$refaddr}++;
+    if ($index >= $#{$params->{$name}}) {
+        $self->{_index}{$refaddr} = 0;
+        $self->{_loop}{$refaddr} = 1;
+    }
+    $params->{$name}[$index];
 }
 
-sub inflated_sprintf {
-    __PACKAGE__->new({ format => $_[0] })->format($_[1]);
+sub _hash_loop {
+    my ($self, $params, $name) = @_;
+    my $refaddr = refaddr $params->{$name};
+    my $value = $self->{_index}{$refaddr};
+    my @index = each $params->{$name};
+    if (not defined $value) {
+        $value = \@index;
+        @index = each $params->{$name};
+    }
+    if (not defined $index[0]) {
+        @index = each $params->{$name};
+        $self->{_loop}{$refaddr} = 1;
+    }
+    $self->{_index}{$refaddr} = \@index;
+    (not defined $self->{kv_separator}) ? $value->[1] : join $self->{kv_separator}, @$value;
+}
+
+sub _is_array {
+    (ref $_[0] and reftype $_[0] eq 'ARRAY');
+}
+
+sub _is_hash {
+    (ref $_[0] and reftype $_[0] eq 'HASH');
+}
+
+sub _is_code {
+    (ref $_[0] and reftype $_[0] eq 'CODE');
 }
 
 1;
@@ -214,7 +314,7 @@ __END__
 
 =head1 NAME
 
-Text::InflatedSprintf - sprintf-like template engine for short messages
+Text::InflatedSprintf - sprintf-like template library for short messages
 
 =head1 SYNOPSIS
 
