@@ -18,7 +18,7 @@ run {
         like(inflated_sprintf($block->format, $block->data), qr{$expected}, $block->name);
     }
     else {
-        is(inflated_sprintf($block->format, $block->data), $block->expected, $block->name);
+        is(inflated_sprintf($block->format, $block->data), $expected, $block->name);
     }
 };
 

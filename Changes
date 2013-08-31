@@ -2,6 +2,13 @@ Revision history for Perl extension Text-InflatedSprintf
 
 {{$NEXT}}
 
+0.03 2013-08-31T15:08:41Z
+
+    - these options are available: maxlength, maxbyte
+
+        - if they are set, text inflation with array and hash elements is limited
+          and new records will be appended to return value
+
 0.02 2013-07-20T13:15:02Z
 
     - %(name) syntax accepts array and hash references

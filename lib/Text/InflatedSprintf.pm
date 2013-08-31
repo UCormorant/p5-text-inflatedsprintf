@@ -4,11 +4,12 @@ use utf8;
 use strict;
 use warnings;
 
-our $VERSION = "0.02";
+our $VERSION = "0.03";
 
 use parent qw(Exporter);
 our @EXPORT = qw(inflated_sprintf);
 
+use bytes ();
 use Carp ();
 use Scalar::Util qw(reftype refaddr);
 
@@ -105,8 +106,6 @@ sub _mk_context {
 
     $self->{_context} = {};
     $self->{_require} = {};
-    $self->{_index} = {};
-    $self->{_loop} = {};
 
     my $const = sub { +{
         content => +shift,
@@ -134,6 +133,7 @@ sub _mk_context {
         my $operator = $5 || '';
 
         if ($open) {
+            pop @{$parent->{content}} if $current->{content} eq '';
             $current = $const->('');
             $current->{parent} = $const->([$current]);
             $mk_relationship->($current->{parent}, $parent);
@@ -144,6 +144,7 @@ sub _mk_context {
             $parent->{name} = $name if $name;
         }
         elsif ($depth and $close) {
+            pop @{$parent->{content}} if $current->{content} eq '';
             $parent->{operator} = $operator if $operator;
 
             $current = $const->('');
@@ -156,13 +157,14 @@ sub _mk_context {
             $current->{content} .= $match;
         }
     }
+    pop @{$parent->{content}} if $current->{content} eq '';
 
     Carp::croak 'syntax error: mismatch tagging' if $depth;
 
     my $mk_requirement; $mk_requirement = sub {
-        for my $c (@{$_[0]}) {
-            if (ref $c->{content} and reftype $c->{content} eq 'ARRAY') {
-                $mk_requirement->($c->{content});
+        for my $c (@{$_[0]{content}}) {
+            if (_is_array($c->{content})) {
+                $mk_requirement->($c);
             }
             else {
                 while ($c->{content} =~ /$REGEX{sprintf}/gc) {
@@ -175,71 +177,162 @@ sub _mk_context {
                     $c->{parent}{require}{$name} = $conv_letter;
                 }
             }
-        }
-    };
-    $mk_requirement->($context->{content});
-
-    my $del_relationship; $del_relationship = sub {
-        for my $c (@{$_[0]}) {
             delete $c->{parent};
-            $del_relationship->($c->{content}) if ref $c->{content} and reftype $c->{content} eq 'ARRAY';
         }
     };
-    $del_relationship->($context->{content});
+    $mk_requirement->($context);
 
-    $self->{_context} = $context->{content};
+    $self->{_context} = $context;
 }
 
 sub format {
     my $self = shift;
     my %data = scalar @_ == 1 ? %{+shift} : @_;
 
-    my $formatted_content = $self->_format($self->{_context}, \%data);
+    $self->{_data} = \%data;
+    $self->{_index} = {};
+    $self->{_index_value} = {};
+    $self->{_loop} = {};
 
-    return join "", @$formatted_content;
+    my @content_list;
+    my $state = {
+        formatted_content => ['DUMMY'],
+        replace_index => 0,
+    };
+    while ($self->_format($self->{_context}, \%data, $state, \@content_list)) {
+        $state = {
+            formatted_content => ['DUMMY'],
+            replace_index => 0,
+        };
+    };
+    push @content_list, join "", @{$state->{formatted_content}};
+
+    wantarray ? @content_list : $content_list[0];
 }
 
 sub _format {
-    my ($self, $context, $data) = @_;
+    my ($self, $context, $data, $state, $content_list) = @_;
 
     my @formatted_content;
-    for my $c (@$context) {
+    for my $c (@{$context->{content}}) {
         if (_is_array($c->{content})) {
-            my %has_loop = ();
+            push @formatted_content, $c;
+        }
+        else {
+            my $not_loop = 1;
             for my $name (keys %{$c->{require}}) {
                 if (defined $data->{$name} and (_is_array($data->{$name}) or _is_hash($data->{$name}))) {
-                    $has_loop{$name} = 1;
+                    my $refaddr = refaddr $data->{$name};
+                    if (exists $self->{_loop}{$refaddr}) {
+                        $not_loop = 0;
+                    }
                 }
             }
-            while (1) {
+            if ($not_loop) {
+                my $content = $c->{content};
+                $content =~ s/$REGEX{sprintf}/
+                    $self->_conversion({
+                        context => $context,
+                        named_params => $data,
+                        conv => $1,
+                        name => $2,
+                        conv_prefix => $3,
+                        conv_letter => $4,
+                    })
+                /ge;
+                push @formatted_content, $content;
+            }
+        }
+    }
+    splice @{$state->{formatted_content}}, $state->{replace_index}, 1, @formatted_content;
+
+    my @grep_content_index;
+    my @grep_contengt = map {
+        my $c = $state->{formatted_content}[$_];
+        if (not _is_hash($c)) {
+            push @grep_content_index, $_ if $state->{replace_index} <= $_ && $_ <= ($state->{replace_index}+$#formatted_content);
+            $c;
+        }
+        else {
+            ();
+        }
+    } 0 .. $#{$state->{formatted_content}};
+    my $text = join "", @grep_contengt;
+    if (defined $self->{minlength} and        length $text < $self->{minlength}) {}
+    if (defined $self->{minbyte}   and bytes::length $text < $self->{minbyte}) {}
+    if (
+        defined $self->{maxlength} && $self->{maxlength} < length $text
+            or
+        defined $self->{maxbyte}   && $self->{maxbyte}   < bytes::length $text
+    ) {
+        while (
+            scalar @grep_content_index
+                and
+            (not defined $self->{maxlength} or $self->{maxlength} < length $text)
+                and
+            (not defined $self->{maxbyte}   or $self->{maxbyte}   < bytes::length $text)
+        ) {
+            splice @grep_contengt, pop @grep_content_index, 1;
+            $text = join "", @grep_contengt;
+        }
+        push @$content_list, $text;
+        for my $key (keys %{$context->{require}}) {
+            my $refaddr = refaddr $data->{$key};
+            if (exists $self->{_index}{$refaddr}) {
+                if (not exists $self->{_loop}{$refaddr}) {
+                    $self->{_index}{$refaddr}--;
+                }
+                else {
+                    delete $self->{_loop}{$refaddr};
+                    $self->{_index}{$refaddr} = $#{$self->{_index_value}{$refaddr}};
+                }
+            }
+        }
+        return 1;
+    }
+
+    my $index = $state->{replace_index};
+    while ($index <= $#{$state->{formatted_content}}) {
+        my $c = $state->{formatted_content}[$index];
+        if (_is_hash($c)){
+            REPEAT: while (1) {
                 my $condition = $c->{name} ? $data->{$c->{name}} : $data;
-                my $content = $self->_format($c->{content}, $condition);
-                push @formatted_content, @$content;
+
+                my %has_loop = ();
+                for my $name (keys %{$c->{require}}) {
+                    if (defined $data->{$name} and (_is_array($data->{$name}) or _is_hash($data->{$name}))) {
+                        $has_loop{$name} = 1;
+                    }
+                }
+                for my $name (keys %has_loop) {
+                    my $refaddr = refaddr $condition->{$name};
+                    if (exists $self->{_loop}{$refaddr}) {
+                        splice @{$state->{formatted_content}}, $index, 1;
+
+                        last REPEAT;
+                    }
+                }
+
+                $state->{replace_index} = $index;
+                return 1 if $self->_format($c, $condition, $state, $content_list);
 
                 for my $name (keys %has_loop) {
                     delete $has_loop{$name} if $self->{_loop}{refaddr $condition->{$name}};
                 }
 
-                last unless $c->{operator} and scalar keys %has_loop;
+                if ($c->{operator} and scalar keys %has_loop) {
+                    $index = ++$state->{replace_index};
+                    splice @{$state->{formatted_content}}, $index, 0, $c;
+                }
+                else {
+                    last REPEAT;
+                }
             }
         }
-        else {
-            my $content = $c->{content};
-            $content =~ s/$REGEX{sprintf}/
-                $self->_conversion({
-                    context => $context,
-                    named_params => $data,
-                    conv => $1,
-                    name => $2,
-                    conv_prefix => $3,
-                    conv_letter => $4,
-                })
-            /ge;
-            push @formatted_content, $content;
-        }
+        $index++;
     }
 
-    \@formatted_content;
+    return 0;
 }
 
 sub _conversion {
@@ -270,8 +363,13 @@ sub _conversion {
 sub _array_loop {
     my ($self, $params, $name) = @_;
     my $refaddr = refaddr $params->{$name};
+
+    if (not exists $self->{_index}{$refaddr}) {
+        $self->{_index_value}{$refaddr} = $params->{$name};
+    }
+
     my $index = $self->{_index}{$refaddr}++;
-    if ($index >= $#{$params->{$name}}) {
+    if ($index >= $#{$self->{_index_value}{$refaddr}}) {
         $self->{_index}{$refaddr} = 0;
         $self->{_loop}{$refaddr} = 1;
     }
@@ -281,17 +379,20 @@ sub _array_loop {
 sub _hash_loop {
     my ($self, $params, $name) = @_;
     my $refaddr = refaddr $params->{$name};
-    my $value = $self->{_index}{$refaddr};
-    my @index = each %{$params->{$name}};
-    if (not defined $value) {
-        $value = \@index;
-        @index = each %{$params->{$name}};
+
+    if (not exists $self->{_index}{$refaddr}) {
+        $self->{_index_value}{$refaddr} = [];
+        while (my @k_v = each %{$params->{$name}}) {
+            push $self->{_index_value}{$refaddr}, \@k_v;
+        }
     }
-    if (not defined $index[0]) {
-        @index = each %{$params->{$name}};
+
+    my $index = $self->{_index}{$refaddr}++;
+    if ($index >= $#{$self->{_index_value}{$refaddr}}) {
+        $self->{_index}{$refaddr} = 0;
         $self->{_loop}{$refaddr} = 1;
     }
-    $self->{_index}{$refaddr} = \@index;
+    my $value = $self->{_index_value}{$refaddr}[$index];
     (not defined $self->{kv_separator}) ? $value->[1] : join $self->{kv_separator}, @$value;
 }
 
