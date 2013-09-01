@@ -44,6 +44,18 @@ subtest 'inflated_sprintf' => sub {
         "Text::InflatedSprintf ".Text::InflatedSprintf->VERSION,
         "do inflated_sprintf",
     );
+
+    is(
+        inflated_sprintf({
+                format => "%(package)s %(version)s",
+                maxlength => 25,
+            },
+            package => 'Text::InflatedSprintf',
+            version => Text::InflatedSprintf->VERSION,
+        ),
+        "",
+        "do inflated_sprintf with option",
+    );
 };
 
 done_testing;

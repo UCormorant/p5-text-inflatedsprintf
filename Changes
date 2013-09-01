@@ -2,6 +2,11 @@ Revision history for Perl extension Text-InflatedSprintf
 
 {{$NEXT}}
 
+0.04 2013-09-01T04:21:57Z
+
+    - inflated_sprintf allows the hash argument for new in first argument
+    - fix infinite loop with maxlength or maxbyte
+
 0.03 2013-08-31T15:08:41Z
 
     - these options are available: maxlength, maxbyte

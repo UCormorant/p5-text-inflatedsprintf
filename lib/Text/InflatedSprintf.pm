@@ -4,7 +4,7 @@ use utf8;
 use strict;
 use warnings;
 
-our $VERSION = "0.03";
+our $VERSION = "0.04";
 
 use parent qw(Exporter);
 our @EXPORT = qw(inflated_sprintf);
@@ -63,7 +63,15 @@ our %REGEX = (
 );
 
 sub inflated_sprintf {
-    __PACKAGE__->new( format => +shift )->format(@_);
+    my $new_args = shift;
+    my $option = {};
+    if (_is_hash($new_args)) {
+        $option = $new_args;
+    }
+    else {
+        $option->{format} = $new_args;
+    }
+    __PACKAGE__->new( $option )->format(@_);
 }
 
 sub new {
@@ -274,6 +282,10 @@ sub _format {
         ) {
             splice @grep_contengt, pop @grep_content_index, 1;
             $text = join "", @grep_contengt;
+        }
+        if ($text eq "") {
+            @{$state->{formatted_content}} = ();
+            return 0;
         }
         push @$content_list, $text;
         for my $key (keys %{$context->{require}}) {
